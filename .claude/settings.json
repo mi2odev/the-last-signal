@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx esbuild *)",
+      "Bash(rm -rf data)",
+      "Bash(node src/seed.js)",
+      "Bash(PORT=4099 node src/server.js)"
+    ]
+  }
+}

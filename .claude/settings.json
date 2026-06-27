@@ -20,7 +20,13 @@
       "Bash(node -e ' *)",
       "Bash(node src/server.js)",
       "Bash(PORT=4321 node src/server.js)",
-      "Bash(PORT=4322 node src/server.js)"
+      "Bash(PORT=4322 node src/server.js)",
+      "Bash(npm ls *)",
+      "Bash(curl -s https://thelastsignal1.netlify.app/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" https://thelastsignal1.netlify.app/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code} %{size_download} bytes\\\\n\" https://thelastsignal1.netlify.app/assets/index-Bx5wdM2i.js)",
+      "Bash(curl -s https://thelastsignal1.netlify.app/assets/index-Bx5wdM2i.js)",
+      "Bash(grep -iE \"^jsdom$|react-dom\")"
     ]
   }
 }

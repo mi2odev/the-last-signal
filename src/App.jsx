@@ -20,6 +20,7 @@ class Component extends React.Component {
   globeRef = React.createRef();
   scrollRef = React.createRef();
   inputRef = React.createRef();
+  typeRef = React.createRef();
   _tseq = 0;
 
   messages = [
@@ -148,6 +149,8 @@ class Component extends React.Component {
     window.addEventListener('resize', this._onResize);
     window.addEventListener('mousemove', this._onMove, {passive:true});
     window.addEventListener('hashchange', this._onHash);
+    // The on-screen keyboard shrinks the visual viewport — keep the typing card in view when it does.
+    if(window.visualViewport){ this._onVV = () => this._scrollType(); window.visualViewport.addEventListener('resize', this._onVV); }
     this._sizeBg();
     this.setState({progress:this._loadProgress()});
     if(api.isAuthed()) this._loadAccountProgress();
@@ -162,6 +165,8 @@ class Component extends React.Component {
     window.removeEventListener('resize', this._onResize);
     window.removeEventListener('mousemove', this._onMove);
     window.removeEventListener('hashchange', this._onHash);
+    if(window.visualViewport && this._onVV) window.visualViewport.removeEventListener('resize', this._onVV);
+    clearTimeout(this._scT);
   }
 
   _loop = (t) => {
@@ -268,7 +273,7 @@ class Component extends React.Component {
   go(route, fromHash){ if(route!=='typing') clearInterval(this._timer); this.setState({route, menuOpen:false});
     // Keep the URL in sync so a refresh restores the same page (browser back/forward works too).
     if(!fromHash && typeof window!=='undefined'){ const target='#/'+route; if(window.location.hash!==target) window.location.hash=target; }
-    if(this.scrollRef.current) this.scrollRef.current.scrollTop=0; this.beep(520,.05,'sine',.04);
+    if(this.scrollRef.current) this.scrollRef.current.scrollTop=0; this._sndUi();
     if(route==='typing'){ this.newMission(this.state.missionIdx); setTimeout(()=>this.focusInput(),80); }
     this._routeLoad(route); }
 
@@ -313,8 +318,21 @@ class Component extends React.Component {
   async _loadAccountProgress(){
     try{ const d=await api.me(); if(d && typeof d.progress==='number') this._applyServerProgress(d.progress); }catch(e){ /* invalid/expired token — stay on local progress */ }
   }
-  _fail(){ clearInterval(this._timer); this.setState({failed:true, finalElapsed:this.state.timeLimit}); this._glitch(); this.beep(150,.3,'sawtooth',.06); setTimeout(()=>this.beep(90,.4,'sawtooth',.05),160); this.toast('SIGNAL LOST · TIME EXPIRED','rec'); }
-  focusInput(){ if(this.inputRef.current) this.inputRef.current.focus(); }
+  _fail(){ clearInterval(this._timer); this.setState({failed:true, finalElapsed:this.state.timeLimit}); this._glitch(); this._sndFail(); this.toast('SIGNAL LOST · TIME EXPIRED','rec'); }
+  focusInput(){ if(this.inputRef.current) this.inputRef.current.focus(); this._scrollType(); }
+  // Keep the transmission card visible above the on-screen keyboard on mobile:
+  // scroll it to sit just under the sticky nav. Re-run when the keyboard opens (visualViewport resize).
+  _scrollType(){
+    const card=this.typeRef.current, sc=this.scrollRef.current;
+    if(!card||!sc||this.state.route!=='typing') return;
+    clearTimeout(this._scT);
+    this._scT=setTimeout(()=>{
+      if(!this.typeRef.current||!this.scrollRef.current) return;
+      const cr=this.typeRef.current.getBoundingClientRect(), sr=this.scrollRef.current.getBoundingClientRect();
+      const delta=cr.top-sr.top-72; // 72px clearance for the sticky nav
+      if(Math.abs(delta)>4) this.scrollRef.current.scrollTo({top:Math.max(0,this.scrollRef.current.scrollTop+delta),behavior:'smooth'});
+    },120);
+  }
 
   handleType(val){
     if(this.state.finished||this.state.failed) return;
@@ -323,16 +341,16 @@ class Component extends React.Component {
     if(!startTime){ startTime = performance.now(); this._startTimer(); }
     if(val.length>typed.length){
       for(let i=typed.length;i<val.length;i++){ keystrokes++;
-        if(val[i]===target[i]){ combo++; maxCombo=Math.max(maxCombo,combo); if(combo>0&&combo%12===0) this._burst(); this.beep(720+Math.min(combo,24)*7,.03,'square',.022); }
-        else { mistakes++; combo=0; this._glitch(); this.beep(120,.09,'sawtooth',.05); }
+        if(val[i]===target[i]){ combo++; maxCombo=Math.max(maxCombo,combo); if(combo>0&&combo%12===0) this._burst(); this._sndKey(combo); }
+        else { mistakes++; combo=0; this._glitch(); this._sndError(); }
       }
-    } else { this.beep(280,.02,'sine',.018); }
+    } else { this._sndBack(); }
     this.setState({typed:val,startTime,keystrokes,mistakes,combo,maxCombo});
     if(val.length===target.length) this._finish(startTime,mistakes,keystrokes);
   }
   _startTimer(){ clearInterval(this._timer); this._timer=setInterval(()=>{ const st=this.state; if(st.route==='typing'&&st.startTime&&!st.finished&&!st.failed){ const el=(performance.now()-st.startTime)/1000; if(el>=st.timeLimit){ this.setState({elapsed:st.timeLimit}); this._fail(); } else { this.setState({elapsed:el}); } } else if(this.state.route!=='typing') clearInterval(this._timer); },80); }
   _finish(startTime,mistakes,keystrokes){ clearInterval(this._timer); const el=(performance.now()-startTime)/1000; this.setState({finished:true,finalElapsed:el});
-    this.beep(620,.12,'sine',.05); setTimeout(()=>this.beep(940,.18,'sine',.05),130);
+    this._sndComplete();
     const mins=el/60, correct=keystrokes-mistakes, wpm=mins>0?Math.round((correct/5)/mins):0;
     const acc=keystrokes>0?(keystrokes-mistakes)/keystrokes*100:100;
     const m=this.missions[this.state.missionIdx%this.missions.length]||{};
@@ -346,10 +364,74 @@ class Component extends React.Component {
     setTimeout(()=>{ this.toast('SIGNAL CONNECTED','ok'); if(wpm>=this.stat.bestWpm) setTimeout(()=>this.toast('NEW RECORD · '+wpm+' WPM','rec'),500); },200);
   }
   _glitch(){ this.setState({glitch:true}); clearTimeout(this._gT); this._gT=setTimeout(()=>this.setState({glitch:false}),250); }
-  _burst(){ const cx=window.innerWidth/2, cy=window.innerHeight*.46, cols=['0,229,255','139,92,246','255,122,0']; for(let i=0;i<26;i++){ const a=Math.random()*6.28, s=1+Math.random()*4.2; this._parts.push({x:cx,y:cy,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:1,size:1+Math.random()*2,col:cols[i%3],burst:true}); } this.setState({pulse:true}); clearTimeout(this._pT); this._pT=setTimeout(()=>this.setState({pulse:false}),550); this.beep(700,.08,'triangle',.04); }
+  _burst(){ const cx=window.innerWidth/2, cy=window.innerHeight*.46, cols=['0,229,255','139,92,246','255,122,0']; for(let i=0;i<26;i++){ const a=Math.random()*6.28, s=1+Math.random()*4.2; this._parts.push({x:cx,y:cy,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:1,size:1+Math.random()*2,col:cols[i%3],burst:true}); } this.setState({pulse:true}); clearTimeout(this._pT); this._pT=setTimeout(()=>this.setState({pulse:false}),550); this._sndBurst(); }
 
-  beep(freq,dur,type,vol){ if(!this.state.soundOn) return; try{ if(!this._ac) this._ac=new (window.AudioContext||window.webkitAudioContext)(); const ac=this._ac; if(ac.state==='suspended') ac.resume(); const o=ac.createOscillator(), g=ac.createGain(); o.type=type||'sine'; o.frequency.value=freq; o.connect(g); g.connect(ac.destination); const t=ac.currentTime; g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(vol||.05,t+.006); g.gain.exponentialRampToValueAtTime(.0001,t+(dur||.08)); o.start(t); o.stop(t+(dur||.08)+.02); }catch(e){} }
-  toggleSound(){ const on=!this.state.soundOn; this.setState({soundOn:on}); if(on){ try{ if(!this._ac) this._ac=new (window.AudioContext||window.webkitAudioContext)(); this._ac.resume&&this._ac.resume(); }catch(e){} this.beep(660,.09,'sine',.05); this.toast('AUDIO ONLINE','ok'); } }
+  // --- Audio engine -------------------------------------------------------
+  // A small synth: every voice runs master -> compressor -> out, with a
+  // parallel convolution-reverb send so the command center feels like a space.
+  _audio(){
+    if(this._ac) return this._ac;
+    try{
+      const AC = window.AudioContext||window.webkitAudioContext; if(!AC) return null;
+      const ac = new AC();
+      const master = ac.createGain(); master.gain.value = .9;
+      const comp = ac.createDynamicsCompressor();
+      comp.threshold.value=-16; comp.knee.value=22; comp.ratio.value=4; comp.attack.value=.003; comp.release.value=.25;
+      master.connect(comp); comp.connect(ac.destination);
+      const verb = ac.createConvolver(); verb.buffer = this._impulse(ac,1.7,2.4);
+      const verbGain = ac.createGain(); verbGain.gain.value=.22;
+      verb.connect(verbGain); verbGain.connect(master);
+      this._ac=ac; this._master=master; this._verb=verb; this._noise=this._noiseBuf(ac);
+    }catch(e){ return null; }
+    return this._ac;
+  }
+  _impulse(ac,dur,decay){ const rate=ac.sampleRate, len=Math.max(1,Math.floor(rate*dur)), buf=ac.createBuffer(2,len,rate);
+    for(let ch=0;ch<2;ch++){ const d=buf.getChannelData(ch); for(let i=0;i<len;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/len,decay); } return buf; }
+  _noiseBuf(ac){ const len=Math.floor(ac.sampleRate*.2), buf=ac.createBuffer(1,len,ac.sampleRate), d=buf.getChannelData(0);
+    for(let i=0;i<len;i++) d[i]=Math.random()*2-1; return buf; }
+  // One oscillator voice with attack/decay envelope, lowpass tone control and optional reverb send.
+  _voice(o){ if(!o||(!this.state.soundOn&&!o.force)) return; const ac=this._audio(); if(!ac||!this._master) return;
+    if(ac.state==='suspended'){ try{ac.resume();}catch(e){} }
+    const t=ac.currentTime+(o.delay||0), dur=o.dur||.1, vol=o.vol!=null?o.vol:.06, atk=o.attack!=null?o.attack:.005;
+    const osc=ac.createOscillator(), g=ac.createGain(), f=ac.createBiquadFilter();
+    f.type='lowpass'; f.frequency.value=o.cutoff||7000;
+    osc.type=o.type||'sine'; if(o.detune) osc.detune.value=o.detune;
+    osc.frequency.setValueAtTime(o.freq,t); if(o.to) osc.frequency.exponentialRampToValueAtTime(Math.max(1,o.to),t+dur);
+    osc.connect(f); f.connect(g); g.connect(this._master); if(o.reverb&&this._verb) g.connect(this._verb);
+    g.gain.setValueAtTime(.0001,t); g.gain.exponentialRampToValueAtTime(vol,t+atk); g.gain.exponentialRampToValueAtTime(.0001,t+dur);
+    osc.start(t); osc.stop(t+dur+.03); }
+  // Filtered noise transient — the "click" layer of a keystroke.
+  _click(dur,freq,vol,q){ if(!this.state.soundOn) return; const ac=this._audio(); if(!ac||!this._noise) return;
+    const t=ac.currentTime, src=ac.createBufferSource(); src.buffer=this._noise;
+    const bp=ac.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=freq; bp.Q.value=q||.9;
+    const g=ac.createGain(); g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(.0001,t+dur);
+    src.connect(bp); bp.connect(g); g.connect(this._master); src.start(t); src.stop(t+dur+.02); }
+
+  // Layered mechanical keystroke — body "thock" + bright tap + noise transient, brightening with combo.
+  _sndKey(combo){ const s=Math.min(combo||0,24), j=(Math.random()*2-1)*5;
+    this._voice({freq:152+s*3+j, to:96, type:'triangle', dur:.07, vol:.05, attack:.001, cutoff:2700});
+    this._voice({freq:1380+s*22, type:'sine', dur:.028, vol:.02, attack:.001, cutoff:9000});
+    this._click(.015, 2100+s*38, .04, 1.1); }
+  _sndBack(){ this._voice({freq:330, to:230, type:'sine', dur:.05, vol:.022, attack:.001, cutoff:3200}); }
+  _sndError(){ this._voice({freq:172, to:88, type:'sawtooth', dur:.14, vol:.045, attack:.001, cutoff:1300, reverb:true});
+    this._click(.02, 320, .03, .7); }
+  // Pleasant ascending pentatonic flourish on every combo milestone.
+  _sndBurst(){ [523.25,659.25,783.99,1046.5].forEach((f,i)=>this._voice({freq:f, type:'triangle', dur:.2, vol:.05, attack:.004, delay:i*.05, reverb:true, cutoff:6500})); }
+  // Triumphant arpeggio over a soft sustained chord.
+  _sndComplete(){ [523.25,659.25,783.99,1046.5,1318.5].forEach((f,i)=>this._voice({freq:f, type:'sine', dur:.55, vol:.06, attack:.005, delay:i*.08, reverb:true, cutoff:8500}));
+    [261.63,329.63,392.0].forEach(f=>this._voice({freq:f, type:'triangle', dur:1.3, vol:.03, attack:.05, delay:.12, reverb:true, cutoff:3000})); }
+  // Detuned descending sweep — the signal dying out.
+  _sndFail(){ this._voice({freq:300, to:78, type:'sawtooth', dur:.75, vol:.06, attack:.004, cutoff:1700, reverb:true});
+    this._voice({freq:296, to:76, type:'sine', dur:.75, vol:.05, attack:.004, delay:.02, detune:-9, reverb:true, cutoff:1500});
+    this._voice({freq:150, to:58, type:'triangle', dur:.95, vol:.04, attack:.01, delay:.12, reverb:true, cutoff:1000}); }
+  // Soft two-note blip for navigation / UI.
+  _sndUi(){ this._voice({freq:560, type:'sine', dur:.08, vol:.03, attack:.002, cutoff:5000, reverb:true});
+    this._voice({freq:840, type:'sine', dur:.05, vol:.018, attack:.002, delay:.025, cutoff:6000}); }
+  _chime(force){ [523.25,783.99].forEach((f,i)=>this._voice({freq:f, type:'sine', dur:.24, vol:.05, attack:.005, delay:i*.09, reverb:true, cutoff:7000, force})); }
+
+  // Back-compat shim: existing beep() callers now route through the synth with reverb + tone shaping.
+  beep(freq,dur,type,vol){ this._voice({freq, dur:dur||.08, type:type||'sine', vol:vol!=null?vol:.05, attack:.005, cutoff:8000, reverb:true}); }
+  toggleSound(){ const on=!this.state.soundOn; this.setState({soundOn:on}); if(on){ const ac=this._audio(); if(ac&&ac.state==='suspended'){ try{ac.resume();}catch(e){} } this._chime(true); this.toast('AUDIO ONLINE','ok'); } }
   toast(msg,kind){ const id=++this._tseq; this.setState(s=>({toasts:[...s.toasts,{id,msg,kind:kind||'ok'}]})); setTimeout(()=>this.setState(s=>({toasts:s.toasts.filter(t=>t.id!==id)})),3200); }
   async login(e){ if(e&&e.preventDefault) e.preventDefault(); if(this.state.authBusy) return;
     const u=(this.state.authUser||'').trim(), p=this.state.authPass||'';
@@ -499,7 +581,8 @@ class Component extends React.Component {
       <div style={css(`position:absolute;inset:0;z-index:1;pointer-events:none;background-image:linear-gradient(rgba(0,229,255,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,.045) 1px,transparent 1px);background-size:64px 64px;mask-image:radial-gradient(ellipse at 50% 35%,#000 25%,transparent 80%);-webkit-mask-image:radial-gradient(ellipse at 50% 35%,#000 25%,transparent 80%);`)}></div>
       <div style={css(`position:absolute;inset:0;z-index:1;pointer-events:none;background:radial-gradient(ellipse at 50% -5%,rgba(0,229,255,.10),transparent 50%),radial-gradient(ellipse at 85% 110%,rgba(139,92,246,.12),transparent 55%),radial-gradient(ellipse at 8% 90%,rgba(255,122,0,.06),transparent 50%);`)}></div>
       <div style={css(`position:absolute;left:0;right:0;height:120px;z-index:2;pointer-events:none;background:linear-gradient(180deg,rgba(0,229,255,.05),transparent);animation:lsscan 7s linear infinite;mix-blend-mode:screen;`)}></div>
-      
+      <div style={css(`position:absolute;inset:0;z-index:3;pointer-events:none;background:radial-gradient(ellipse at 50% 38%,transparent 52%,rgba(2,4,12,.55) 100%);`)}></div>
+
       <div ref={scrollRef} onScroll={onScroll} style={css(`position:absolute;inset:0;z-index:5;overflow-y:auto;overflow-x:hidden;scroll-behavior:smooth;`)}>
       
       <nav style={css(`position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:13px clamp(16px,4vw,42px);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);`)}>
@@ -661,7 +744,7 @@ class Component extends React.Component {
       
         {typingActive && (<>
         <div>
-          <div onClick={focusInput} style={css(`position:relative;padding:clamp(26px,4vw,44px);border-radius:20px;background:rgba(9,14,30,.6);border:1px solid rgba(0,229,255,.2);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:0 16px 60px rgba(0,0,0,.5),inset 0 0 60px rgba(0,229,255,.03);cursor:text;overflow:hidden;`)}>
+          <div ref={this.typeRef} onClick={focusInput} style={css(`position:relative;scroll-margin-top:80px;padding:clamp(26px,4vw,44px);border-radius:20px;background:rgba(9,14,30,.6);border:1px solid rgba(0,229,255,.2);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:0 16px 60px rgba(0,0,0,.5),inset 0 0 60px rgba(0,229,255,.03);cursor:text;overflow:hidden;`)}>
             <div style={css(`position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,#00E5FF,transparent);opacity:.6;`)}></div>
             <div style={css(`font-family:'JetBrains Mono',monospace;font-size:clamp(18px,2.7vw,27px);line-height:2;letter-spacing:.01em;white-space:pre-wrap;overflow-wrap:break-word;`)}>{chars.map((c, $index) => (<React.Fragment key={$index}><span style={css(`position:relative;`)}>{c.current && (<><span style={css(`position:absolute;left:-2px;top:8%;bottom:8%;width:2.5px;border-radius:2px;background:#00E5FF;box-shadow:0 0 12px #00E5FF,0 0 22px #00E5FF;animation:lsblink 1.05s steps(1) infinite;`)}></span></>)}<span style={c.style}>{c.ch}</span></span></React.Fragment>))}</div>
             <input ref={inputRef} value={typedVal} onChange={onType} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} style={css(`position:absolute;inset:0;width:100%;height:100%;opacity:0;border:none;background:transparent;color:transparent;caret-color:transparent;font-size:16px;cursor:text;`)}/>
@@ -1053,10 +1136,10 @@ class Component extends React.Component {
       
       <button onClick={toggleSound} title="Toggle sound" style={css(`position:absolute;bottom:20px;left:20px;z-index:85;width:50px;height:50px;border-radius:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;background:rgba(8,14,30,.85);border:1px solid ${soundBorder};backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);box-shadow:0 0 22px ${soundGlow};transition:all .3s;`)}>
         <div style={css(`display:flex;align-items:flex-end;gap:3px;height:20px;`)}>
-          <span style={css(`width:3px;border-radius:3px;background:${soundColor};height:${sb1};box-shadow:0 0 6px ${soundColor};`)}></span>
-          <span style={css(`width:3px;border-radius:3px;background:${soundColor};height:${sb2};box-shadow:0 0 6px ${soundColor};`)}></span>
-          <span style={css(`width:3px;border-radius:3px;background:${soundColor};height:${sb3};box-shadow:0 0 6px ${soundColor};`)}></span>
-          <span style={css(`width:3px;border-radius:3px;background:${soundColor};height:${sb4};box-shadow:0 0 6px ${soundColor};`)}></span>
+          <span style={css(`width:3px;border-radius:3px;background:${soundColor};height:${sb1};box-shadow:0 0 6px ${soundColor};animation:${soundOn?'lseq .82s ease-in-out infinite':'none'};animation-delay:0s;`)}></span>
+          <span style={css(`width:3px;border-radius:3px;background:${soundColor};height:${sb2};box-shadow:0 0 6px ${soundColor};animation:${soundOn?'lseq .82s ease-in-out infinite':'none'};animation-delay:-.55s;`)}></span>
+          <span style={css(`width:3px;border-radius:3px;background:${soundColor};height:${sb3};box-shadow:0 0 6px ${soundColor};animation:${soundOn?'lseq .82s ease-in-out infinite':'none'};animation-delay:-.28s;`)}></span>
+          <span style={css(`width:3px;border-radius:3px;background:${soundColor};height:${sb4};box-shadow:0 0 6px ${soundColor};animation:${soundOn?'lseq .82s ease-in-out infinite':'none'};animation-delay:-.7s;`)}></span>
         </div>
       </button>
       

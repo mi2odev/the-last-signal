@@ -4,7 +4,23 @@
       "Bash(npx esbuild *)",
       "Bash(rm -rf data)",
       "Bash(node src/seed.js)",
-      "Bash(PORT=4099 node src/server.js)"
+      "Bash(PORT=4099 node src/server.js)",
+      "Bash(npm uninstall *)",
+      "Bash(export TURSO_DATABASE_URL=\"file:./data/local.db\")",
+      "Bash(export JWT_SECRET=\"test-secret\")",
+      "Bash(TURSO_DATABASE_URL=\"file:./data/local.db\" JWT_SECRET=\"test-secret\" PORT=4099 node src/server.js)",
+      "Bash(node -e \"console.log\\(require\\('crypto'\\).randomBytes\\(48\\).toString\\('hex'\\)\\)\")",
+      "Bash(docker --version)",
+      "Bash(powershell.exe -NoProfile -Command \"Start-Process -FilePath 'C:\\\\Program Files\\\\Docker\\\\Docker\\\\Docker Desktop.exe' -ErrorAction SilentlyContinue\")",
+      "Bash(docker rm *)",
+      "Bash(docker run *)",
+      "Bash(export DATABASE_URL=\"postgres://postgres:pass@localhost:6543/tls\")",
+      "Bash(export DATABASE_SSL=\"disable\")",
+      "Bash(DATABASE_URL=\"postgres://postgres:pass@localhost:6543/tls\" DATABASE_SSL=\"disable\" JWT_SECRET=\"test-secret\" PORT=4099 node src/server.js)",
+      "Bash(node -e ' *)",
+      "Bash(node src/server.js)",
+      "Bash(PORT=4321 node src/server.js)",
+      "Bash(PORT=4322 node src/server.js)"
     ]
   }
 }

@@ -6,12 +6,14 @@ function css(str){const o={};String(str).split(';').forEach(d=>{const i=d.indexO
 class Component extends React.Component {
 
   state = {
-    route:'home', scrolled:false, soundOn:false, menuOpen:false, vw: (typeof window!=='undefined'?window.innerWidth:1280),
+    route:this._routeFromHash(), scrolled:false, soundOn:false, menuOpen:false, vw: (typeof window!=='undefined'?window.innerWidth:1280),
     target:'', typed:'', keystrokes:0, startTime:0, elapsed:0, finalElapsed:0,
     finished:false, mistakes:0, combo:0, maxCombo:0, missionIdx:0, glitch:false, pulse:false,
     authUser:'', authPass:'', authConfirm:'', registered:false, authBusy:false,
     dSignal:0, dWords:0, dCities:0, toasts:[],
     timeLimit:60, failed:false, quick:false, quickIdx:0, progress:0,
+    liveLeaders:null, liveStat:null, liveRecent:null, liveSeries:null, liveAccDist:null,
+    liveAch:null, liveJoined:null, liveTpd:null,
   };
 
   bgRef = React.createRef();
@@ -90,18 +92,8 @@ class Component extends React.Component {
     {key:'final', label:'FINAL TRANSMISSION', sub:'The Last Signal', signal:'100%', blurb:'One message remains. Millions of characters, every operator alive, typing as one. Send it, and the world hears us again.'},
   ];
 
-  leaders = [
-    {rank:1, user:'NOVA_PRIME', wpm:178, acc:99.1, tests:1284},
-    {rank:2, user:'GHOST_RELAY', wpm:171, acc:98.4, tests:1109},
-    {rank:3, user:'AETHER_07', wpm:166, acc:98.9, tests:980},
-    {rank:4, user:'CIPHER_X', wpm:159, acc:97.8, tests:1442},
-    {rank:5, user:'HALCYON', wpm:154, acc:98.2, tests:712},
-    {rank:6, user:'VESPER', wpm:149, acc:96.9, tests:889},
-    {rank:7, user:'OPERATOR-7', wpm:142, acc:97.4, tests:347, me:true},
-    {rank:8, user:'KESTREL', wpm:138, acc:96.1, tests:604},
-    {rank:9, user:'MERIDIAN', wpm:133, acc:95.8, tests:521},
-    {rank:10, user:'ZEPHYR_9', wpm:129, acc:97.0, tests:466},
-  ];
+  // Leaderboard is loaded live from the backend (see loadLeaderboard). No demo data.
+  leaders = [];
 
   stat = {bestWpm:142, avgWpm:96, totalTests:347, totalWords:'62,940', totalTime:'38h 24m'};
   recent = [
@@ -134,21 +126,16 @@ class Component extends React.Component {
     {tag:'03', title:'The Mission', body:'The Last Signal is the training ground and the front line. Every mission you complete strengthens a real node on the mesh. Every word transmitted lights another window in a city that had gone dark.'},
     {tag:'04', title:'The Technology', body:'A reactive command interface built for focus and flow: a live transmission engine, a holographic world map, and a metrics core that turns your raw typing into the language of mission control.'},
   ];
+  // `key` maps to the backend's computed achievement flags (see loadStats); `got` is derived live.
   achievements = [
-    {name:'First Light', desc:'Complete your first mission', got:true, glyph:'✦'},
-    {name:'Speed Demon', desc:'Break 140 WPM', got:true, glyph:'⚡'},
-    {name:'Perfect Signal', desc:'100% accuracy run', got:true, glyph:'◎'},
-    {name:'Combo King', desc:'Hit a 100 keystroke streak', got:true, glyph:'∞'},
-    {name:'Marathon', desc:'Type for 30 minutes total', got:false, glyph:'◷'},
-    {name:'Globetrotter', desc:'Restore 50 cities', got:false, glyph:'◍'},
+    {key:'firstLight', name:'First Light', desc:'Complete your first mission', glyph:'✦'},
+    {key:'speedDemon', name:'Speed Demon', desc:'Break 140 WPM', glyph:'⚡'},
+    {key:'perfectSignal', name:'Perfect Signal', desc:'100% accuracy run', glyph:'◎'},
+    {key:'centurion', name:'Centurion', desc:'Complete 10 transmissions', glyph:'∞'},
+    {key:'marathon', name:'Marathon', desc:'Type for 30 minutes total', glyph:'◷'},
+    {key:'globetrotter', name:'Globetrotter', desc:'Restore 50 cities', glyph:'◍'},
   ];
-  activity = [
-    {when:'2m ago', what:'Completed mission Dead Air', val:'+340 SIG', kind:'ok'},
-    {when:'1h ago', what:'New personal best — 142 WPM', val:'RECORD', kind:'rec'},
-    {when:'3h ago', what:'Restored Berlin Substation', val:'CITY +1', kind:'ok'},
-    {when:'Yesterday', what:'Reached Operator Level 12', val:'LVL UP', kind:'lvl'},
-    {when:'2d ago', what:'Completed mission Cold Harbor', val:'+260 SIG', kind:'ok'},
-  ];
+  // Recent Activity is built live from the operator's runs (see renderVals).
 
   componentDidMount(){
     this._mouse = {x:.5, y:.5};
@@ -156,18 +143,25 @@ class Component extends React.Component {
     this._raf = requestAnimationFrame(this._loop);
     this._onResize = () => { this.setState({vw:window.innerWidth}); this._sizeBg(); };
     this._onMove = (e) => { this._mouse.x = e.clientX/window.innerWidth; this._mouse.y = e.clientY/window.innerHeight; };
+    // Browser back/forward (and manual hash edits) drive navigation.
+    this._onHash = () => { const r=this._routeFromHash(); if(r!==this.state.route) this.go(r, true); };
     window.addEventListener('resize', this._onResize);
     window.addEventListener('mousemove', this._onMove, {passive:true});
+    window.addEventListener('hashchange', this._onHash);
     this._sizeBg();
     this.setState({progress:this._loadProgress()});
+    if(api.isAuthed()) this._loadAccountProgress();
     this.newMission(0);
-    this._animateCounts();
+    this.loadGlobal();
+    // Load data for whatever page the URL restored us to on refresh.
+    this._routeLoad(this.state.route);
   }
   componentWillUnmount(){
     cancelAnimationFrame(this._raf); cancelAnimationFrame(this._cRaf);
     clearInterval(this._timer); clearTimeout(this._gT); clearTimeout(this._pT);
     window.removeEventListener('resize', this._onResize);
     window.removeEventListener('mousemove', this._onMove);
+    window.removeEventListener('hashchange', this._onHash);
   }
 
   _loop = (t) => {
@@ -245,16 +239,60 @@ class Component extends React.Component {
     ctx.globalAlpha=.4; ctx.strokeStyle='rgba(139,92,246,.5)'; ctx.lineWidth=5; ctx.beginPath(); ctx.arc(cx,cy,R+3,0,6.29); ctx.stroke(); ctx.globalAlpha=1;
   }
 
-  _animateCounts(){
+  _animateCounts(signal, words, cities){
+    cancelAnimationFrame(this._cRaf);
     const dur=1700, t0=performance.now();
     const tick=()=>{ const k=Math.min(1,(performance.now()-t0)/dur), e=1-Math.pow(1-k,3);
-      this.setState({dSignal:Math.round(68*e), dWords:Math.round(4257284*e), dCities:Math.round(38*e)});
+      this.setState({dSignal:Math.round(signal*e), dWords:Math.round(words*e), dCities:Math.round(cities*e)});
       if(k<1) this._cRaf=requestAnimationFrame(tick); };
     tick();
   }
+  loadGlobal(){
+    api.globalStats().then(g=>{
+      const cities=g.cities||0, words=g.words||0;
+      const signal=Math.min(100, Math.round((cities/Math.max(1,this.missions.length))*100));
+      this._animateCounts(signal, words, cities);
+    }).catch(()=>{ this._animateCounts(0,0,0); });
+  }
 
-  go(route){ if(route!=='typing') clearInterval(this._timer); this.setState({route, menuOpen:false}); if(this.scrollRef.current) this.scrollRef.current.scrollTop=0; this.beep(520,.05,'sine',.04);
-    if(route==='typing'){ this.newMission(this.state.missionIdx); setTimeout(()=>this.focusInput(),80); } }
+  _routeFromHash(){
+    if(typeof window==='undefined') return 'home';
+    const h=(window.location.hash||'').replace(/^#\/?/, '').split('?')[0];
+    const valid=['home','story','leaderboard','stats','about','login','register','profile','404'];
+    return valid.indexOf(h)>=0 ? h : 'home';
+  }
+  _routeLoad(route){
+    if(route==='leaderboard') this.loadLeaderboard();
+    if(route==='stats'||route==='profile') this.loadStats();
+  }
+  go(route, fromHash){ if(route!=='typing') clearInterval(this._timer); this.setState({route, menuOpen:false});
+    // Keep the URL in sync so a refresh restores the same page (browser back/forward works too).
+    if(!fromHash && typeof window!=='undefined'){ const target='#/'+route; if(window.location.hash!==target) window.location.hash=target; }
+    if(this.scrollRef.current) this.scrollRef.current.scrollTop=0; this.beep(520,.05,'sine',.04);
+    if(route==='typing'){ this.newMission(this.state.missionIdx); setTimeout(()=>this.focusInput(),80); }
+    this._routeLoad(route); }
+
+  async loadLeaderboard(){
+    try{
+      const data = await api.leaderboard(50);
+      let rows = (data && data.leaderboard) || [];
+      if(data && data.you) rows = [...rows, data.you];
+      if(rows.length) this.setState({liveLeaders:rows});
+    }catch(e){ /* keep static demo leaderboard as fallback */ }
+  }
+  async loadStats(){
+    if(!api.isAuthed()){ this.setState({liveStat:null, liveRecent:null, liveSeries:null, liveAccDist:null, liveAch:null, liveJoined:null, liveTpd:null}); return; }
+    try{
+      const d = await api.myStats();
+      this.setState({liveStat:d.stat, liveRecent:d.recent, liveSeries:d.wpmSeries, liveAccDist:d.accDist, liveAch:d.achievements, liveJoined:d.joined, liveTpd:d.testsPerDay});
+    }catch(e){ /* keep static fallback */ }
+  }
+  logout(){
+    api.logout();
+    this.setState({liveStat:null, liveRecent:null, liveSeries:null, liveAccDist:null, liveAch:null, liveJoined:null, liveTpd:null, liveLeaders:null, progress:this._loadProgress()});
+    this.beep(440,.1,'sine',.05); this.toast('SIGNED OUT','ok');
+    this.go('home');
+  }
   newMission(idx){ clearInterval(this._timer); const n=this.missions.length; const i=((idx%n)+n)%n; const m=this.missions[i]; const text=this._scriptAt(i); const tl=this._timeLimitFor(m.diff,text.length); this.setState({quick:false, missionIdx:i, target:text, timeLimit:tl, typed:'', keystrokes:0, startTime:0, elapsed:0, finalElapsed:0, finished:false, failed:false, mistakes:0, combo:0, maxCombo:0}); }
   retry(){ clearInterval(this._timer); this.setState({typed:'', keystrokes:0, startTime:0, elapsed:0, finalElapsed:0, finished:false, failed:false, mistakes:0, combo:0, maxCombo:0, route:'typing'}); setTimeout(()=>this.focusInput(),80); }
   nextMission(){ if(this.state.quick){ this.quickPlay(); return; } const next=this.state.missionIdx+1; if(next<this.missions.length && next<=this.state.progress){ this.newMission(next); this.setState({route:'typing'}); setTimeout(()=>this.focusInput(),80); } else { this.go('story'); } }
@@ -265,6 +303,16 @@ class Component extends React.Component {
   _timeLimitFor(diff,len){ const f={Recruit:.60,Operator:.52,Specialist:.46,Veteran:.40,Legend:.34}[diff]||.5; return Math.max(8,Math.ceil(len*f)); }
   _loadProgress(){ try{ const v=localStorage.getItem('tls_progress_v1'); const n=v?parseInt(v,10):0; return isNaN(n)?0:Math.max(0,Math.min(this.missions.length,n)); }catch(e){ return 0; } }
   _saveProgress(p){ try{ localStorage.setItem('tls_progress_v1',String(p)); }catch(e){} }
+  // Merge the account's saved progress with whatever is local (take the furthest), apply it,
+  // cache it, and push it back up to the server if the local value was ahead.
+  _applyServerProgress(serverP){
+    const merged = Math.min(this.missions.length, Math.max(this._loadProgress(), this.state.progress||0, serverP||0));
+    this.setState({progress:merged}); this._saveProgress(merged);
+    if(api.isAuthed() && merged>(serverP||0)) api.saveProgress(merged).catch(()=>{});
+  }
+  async _loadAccountProgress(){
+    try{ const d=await api.me(); if(d && typeof d.progress==='number') this._applyServerProgress(d.progress); }catch(e){ /* invalid/expired token — stay on local progress */ }
+  }
   _fail(){ clearInterval(this._timer); this.setState({failed:true, finalElapsed:this.state.timeLimit}); this._glitch(); this.beep(150,.3,'sawtooth',.06); setTimeout(()=>this.beep(90,.4,'sawtooth',.05),160); this.toast('SIGNAL LOST · TIME EXPIRED','rec'); }
   focusInput(){ if(this.inputRef.current) this.inputRef.current.focus(); }
 
@@ -286,7 +334,15 @@ class Component extends React.Component {
   _finish(startTime,mistakes,keystrokes){ clearInterval(this._timer); const el=(performance.now()-startTime)/1000; this.setState({finished:true,finalElapsed:el});
     this.beep(620,.12,'sine',.05); setTimeout(()=>this.beep(940,.18,'sine',.05),130);
     const mins=el/60, correct=keystrokes-mistakes, wpm=mins>0?Math.round((correct/5)/mins):0;
-    if(!this.state.quick){ const next=this.state.missionIdx+1; if(next>this.state.progress){ this._saveProgress(next); this.setState({progress:next}); setTimeout(()=>this.toast('SECTOR UNLOCKED','ok'),1100); } }
+    const acc=keystrokes>0?(keystrokes-mistakes)/keystrokes*100:100;
+    const m=this.missions[this.state.missionIdx%this.missions.length]||{};
+    // Record the run for logged-in operators so it counts toward the leaderboard and global totals.
+    if(api.isAuthed()){
+      api.submitRun({ missionId: this.state.quick?null:m.id, wpm, accuracy:acc, mistakes, keystrokes, durationSec:el })
+        .then(()=>this.loadGlobal())
+        .catch(()=>{});
+    }
+    if(!this.state.quick){ const next=this.state.missionIdx+1; if(next>this.state.progress){ this._saveProgress(next); this.setState({progress:next}); if(api.isAuthed()) api.saveProgress(next).catch(()=>{}); setTimeout(()=>this.toast('SECTOR UNLOCKED','ok'),1100); } }
     setTimeout(()=>{ this.toast('SIGNAL CONNECTED','ok'); if(wpm>=this.stat.bestWpm) setTimeout(()=>this.toast('NEW RECORD · '+wpm+' WPM','rec'),500); },200);
   }
   _glitch(){ this.setState({glitch:true}); clearTimeout(this._gT); this._gT=setTimeout(()=>this.setState({glitch:false}),250); }
@@ -300,7 +356,8 @@ class Component extends React.Component {
     if(!u||!p){ this.toast('ENTER CALLSIGN AND ACCESS CODE','rec'); this._glitch(); return; }
     this.setState({authBusy:true});
     try{
-      await api.login(u,p);
+      const data = await api.login(u,p);
+      this._applyServerProgress(data && data.progress);
       this.beep(700,.1,'sine',.05); this.toast('SIGNAL CONNECTED','ok');
       this.setState({authBusy:false, authPass:''});
       setTimeout(()=>this.go('home'),750);
@@ -316,7 +373,9 @@ class Component extends React.Component {
     if(p!==c){ this.toast('ACCESS CODES DO NOT MATCH','rec'); this._glitch(); return; }
     this.setState({authBusy:true});
     try{
-      await api.register(u,p);
+      const data = await api.register(u,p);
+      // New account: push any guest progress up so it isn't lost on signup.
+      this._applyServerProgress(data && data.progress);
       this.setState({registered:true, authBusy:false, authPass:'', authConfirm:''});
       this.beep(700,.1,'sine',.05); setTimeout(()=>this.beep(990,.16,'sine',.05),150);
       this.toast('OPERATOR CREATED','ok');
@@ -329,16 +388,22 @@ class Component extends React.Component {
 
   _fmt(sec){ const s=Math.floor(sec), m=Math.floor(s/60); return m+':'+String(s%60).padStart(2,'0'); }
   _comma(n){ return (n||0).toLocaleString('en-US'); }
-  _charts(){
-    const wpm=this.wpmSeries, n=wpm.length, W=620, H=200, pad=16;
-    const max=Math.max(...wpm)*1.08, min=Math.min(...wpm)*.82;
-    const xs=i=>pad+(i/(n-1))*(W-2*pad), ys=v=>H-pad-((v-min)/(max-min))*(H-2*pad);
+  _charts(series, accDist, tpd){
+    // When logged in, `series` is the operator's real run history (possibly short/empty);
+    // use it as-is. When logged out it's null, so fall back to the demo curve.
+    const live = Array.isArray(series);
+    let wpm = live ? series.slice() : this.wpmSeries;
+    if(live && wpm.length<2) wpm = wpm.length===1 ? [wpm[0], wpm[0]] : [0,0];
+    const n=wpm.length, W=620, H=200, pad=16;
+    const max=Math.max(...wpm)*1.08, min=Math.min(...wpm)*.82, range=(max-min)||1;
+    const xs=i=>pad+(n>1?(i/(n-1)):0)*(W-2*pad), ys=v=>H-pad-((v-min)/range)*(H-2*pad);
     const pts=wpm.map((v,i)=>xs(i).toFixed(1)+','+ys(v).toFixed(1)).join(' ');
     const area='M '+pad+' '+(H-pad)+' L '+wpm.map((v,i)=>xs(i).toFixed(1)+' '+ys(v).toFixed(1)).join(' L ')+' L '+(W-pad)+' '+(H-pad)+' Z';
     const dots=wpm.map((v,i)=>({x:xs(i).toFixed(1),y:ys(v).toFixed(1)}));
-    const tpd=this.testsPerDay, bmax=Math.max(...tpd.map(d=>d.v))*1.18, step=(W-2*pad)/tpd.length, bw=step*.5;
-    const bars=tpd.map((d,i)=>{ const x=pad+i*step+(step-bw)/2, h=(d.v/bmax)*(H-2*pad-10); return {x:x.toFixed(1),y:(H-pad-h).toFixed(1),w:bw.toFixed(1),h:h.toFixed(1),label:d.d,v:d.v,lx:(x+bw/2).toFixed(1),vy:(H-pad-h-7).toFixed(1)}; });
-    const C=2*Math.PI*54; let off=0; const donut=this.accDist.map(d=>{ const len=d.pct/100*C, seg={label:d.label,pct:d.pct,color:d.color,dash:len.toFixed(2),gap:(C-len).toFixed(2),offset:(-off).toFixed(2)}; off+=len; return seg; });
+    const tpdSrc=(tpd&&tpd.length)?tpd:this.testsPerDay, bmax=(Math.max(...tpdSrc.map(d=>d.v))||1)*1.18, step=(W-2*pad)/tpdSrc.length, bw=step*.5;
+    const bars=tpdSrc.map((d,i)=>{ const x=pad+i*step+(step-bw)/2, h=(d.v/bmax)*(H-2*pad-10); return {x:x.toFixed(1),y:(H-pad-h).toFixed(1),w:bw.toFixed(1),h:h.toFixed(1),label:d.d,v:d.v,lx:(x+bw/2).toFixed(1),vy:(H-pad-h-7).toFixed(1)}; });
+    const accSrc=(accDist&&accDist.length)?accDist:this.accDist;
+    const C=2*Math.PI*54; let off=0; const donut=accSrc.map(d=>{ const len=d.pct/100*C, seg={label:d.label,pct:d.pct,color:d.color,dash:len.toFixed(2),gap:(C-len).toFixed(2),offset:(-off).toFixed(2)}; off+=len; return seg; });
     return {wpmPts:pts, wpmArea:area, wpmDots:dots, bars, donut, donutC:C.toFixed(2)};
   }
 
@@ -372,6 +437,19 @@ class Component extends React.Component {
     const prog = s.progress;
     const missionsV = this.missions.map((mm,i)=>({...mm, done:i<prog, unlocked:i<=prog, locked:i>prog, start:()=>this.startMissionAt(i)}));
     const phasesV = this.phases.map(p=>({...p, missions: missionsV.filter(mm=>mm.phase===p.key)}));
+    // Leaderboard comes live from the backend; empty until real operators log runs.
+    const lb = s.liveLeaders || this.leaders;
+    const podiumPh = {user:'—', wpm:'—'};
+    const profileStat = s.liveStat || this.stat;
+    const authed = api.isAuthed();
+    const authedUser = api.currentUser();
+    const profileName = (authedUser && authedUser.username) || (authed ? 'OPERATOR' : 'GUEST');
+    const profileJoined = s.liveJoined || '—';
+    const profileLevel = 1 + Math.floor((profileStat.totalTests||0)/5);
+    const avgAcc = (s.liveStat && s.liveStat.avgAcc!=null) ? Math.round(s.liveStat.avgAcc) : 97;
+    const ach = s.liveAch || {};
+    const recentRuns = s.liveRecent || [];
+    const activityV = recentRuns.map(r=>{ const m=this.missions.find(mm=>mm.id===r.missionId); const isRec=r.wpm===profileStat.bestWpm; const color=isRec?'#FF7A00':'#19f0a0'; return { what:'Completed '+(m?m.name:(r.missionId||'Transmission')), when:r.date, val:isRec?'RECORD':(r.wpm+' WPM'), kind:isRec?'rec':'ok', color, bdr:isRec?'rgba(255,122,0,.3)':'rgba(25,240,160,.3)' }; });
 
     return {
       isHome:s.route==='home', isTyping:s.route==='typing', isLeaderboard:s.route==='leaderboard', isStats:s.route==='stats', isStory:s.route==='story', isLogin:s.route==='login', isRegister:s.route==='register', isProfile:s.route==='profile', isAbout:s.route==='about', isNotFound:s.route==='404',
@@ -396,12 +474,14 @@ class Component extends React.Component {
       startMission:()=>this.quickPlay(), quickPlay:()=>this.quickPlay(), retry:()=>this.retry(), nextMission:()=>this.nextMission(),
       missions:this.missions, startMissionAt:(i)=>this.startMissionAt(i),
       missionsV, phasesV,
-      leaders:this.leaders, p1:this.leaders[0], p2:this.leaders[1], p3:this.leaders[2],
-      leadersRows:this.leaders.map(L=>({...L, accStr:L.acc.toFixed(1), rankColor: L.rank===1?'#ffcf5a':(L.rank===2?'#cbd5e1':(L.rank===3?'#e0934a':'#5d8ba3')), rowStyle: L.me?{background:'rgba(0,229,255,.08)',border:'1px solid rgba(0,229,255,.4)',boxShadow:'inset 0 0 30px rgba(0,229,255,.06)'}:{background:'rgba(255,255,255,.02)',border:'1px solid rgba(255,255,255,.05)'}})),
-      stat:this.stat, recent:this.recent, aboutSecs:this.aboutSecs,
-      achievementsV:this.achievements.map(a=>({...a, locked:!a.got})),
-      activityV:this.activity.map(a=>({...a, color:a.kind==='rec'?'#FF7A00':(a.kind==='lvl'?'#8B5CF6':'#19f0a0'), bdr:a.kind==='rec'?'rgba(255,122,0,.3)':(a.kind==='lvl'?'rgba(139,92,246,.3)':'rgba(25,240,160,.3)')})),
-      ...this._charts(),
+      leaders:lb, p1:lb[0]||podiumPh, p2:lb[1]||podiumPh, p3:lb[2]||podiumPh, noOperators:lb.length===0,
+      leadersRows:lb.map(L=>({...L, accStr:Number(L.acc).toFixed(1), rankColor: L.rank===1?'#ffcf5a':(L.rank===2?'#cbd5e1':(L.rank===3?'#e0934a':'#5d8ba3')), rowStyle: L.me?{background:'rgba(0,229,255,.08)',border:'1px solid rgba(0,229,255,.4)',boxShadow:'inset 0 0 30px rgba(0,229,255,.06)'}:{background:'rgba(255,255,255,.02)',border:'1px solid rgba(255,255,255,.05)'}})),
+      stat:profileStat, recent:s.liveRecent||this.recent, aboutSecs:this.aboutSecs,
+      profileName, profileBestWpm:profileStat.bestWpm, profileMissions:profileStat.totalTests,
+      profileLevel, profileJoined, avgAcc, authed, onLogout:()=>this.logout(),
+      achievementsV:this.achievements.map(a=>({...a, got:!!ach[a.key], locked:!ach[a.key]})),
+      activityV, noActivity:activityV.length===0,
+      ...this._charts(s.liveSeries, s.liveAccDist, s.liveTpd),
       registered:s.registered, onLogin:(e)=>this.login(e), onRegister:(e)=>this.register(e),
       authUser:s.authUser, authPass:s.authPass, authConfirm:s.authConfirm,
       setAuthUser:(e)=>this.setState({authUser:e.target.value}), setAuthPass:(e)=>this.setState({authPass:e.target.value}), setAuthConfirm:(e)=>this.setState({authConfirm:e.target.value}),
@@ -411,7 +491,7 @@ class Component extends React.Component {
 
 
   render(){
-    const { bgRef, scrollRef, onScroll, navFill, goHome, desktopNav, navItems, goProfile, goLogin, mobileNav, toggleMenu, isHome, globeRef, startMission, goLeaderboard, dSignal, dWords, dCities, features, story, isTyping, missionTag, missionDiff, missionLoc, pulse, wpm, acc, mistakes, countStr, combo, signal, typingActive, focusInput, chars, inputRef, typedVal, onType, charsTyped, targetLen, progress, failed, retry, goStory, finished, durStr, nextMission, goStats, isLeaderboard, p2, p1, p3, leadersRows, isStats, stat, wpmArea, wpmPts, wpmDots, bars, donut, recent, isStory, phasesV, isLogin, onLogin, authUser, setAuthUser, authPass, setAuthPass, goRegister, isRegister, onRegister, authConfirm, setAuthConfirm, registered, isProfile, achievementsV, activityV, isAbout, aboutSecs, isNotFound, showFooter, goAbout, go404, menuOpen, glitch, toasts, toggleSound, soundBorder, soundGlow, soundColor, sb1, sb2, sb3, sb4 } = this.renderVals();
+    const { bgRef, scrollRef, onScroll, navFill, goHome, desktopNav, navItems, goProfile, goLogin, mobileNav, toggleMenu, isHome, globeRef, startMission, goLeaderboard, dSignal, dWords, dCities, features, story, isTyping, missionTag, missionDiff, missionLoc, pulse, wpm, acc, mistakes, countStr, combo, signal, typingActive, focusInput, chars, inputRef, typedVal, onType, charsTyped, targetLen, progress, failed, retry, goStory, finished, durStr, nextMission, goStats, isLeaderboard, p2, p1, p3, leadersRows, noOperators, isStats, stat, wpmArea, wpmPts, wpmDots, bars, donut, recent, isStory, phasesV, isLogin, onLogin, authUser, setAuthUser, authPass, setAuthPass, goRegister, isRegister, onRegister, authConfirm, setAuthConfirm, registered, isProfile, achievementsV, activityV, isAbout, aboutSecs, isNotFound, showFooter, goAbout, go404, menuOpen, glitch, toasts, toggleSound, soundBorder, soundGlow, soundColor, sb1, sb2, sb3, sb4, profileName, profileBestWpm, profileMissions, profileLevel, profileJoined, avgAcc, authed, onLogout, noActivity } = this.renderVals();
     return (
       <div style={css(`position:relative;height:100vh;width:100%;overflow:hidden;background:#050816;font-family:'Inter',system-ui,sans-serif;color:#dbe6ff;`)}>
       
@@ -444,9 +524,9 @@ class Component extends React.Component {
         <div style={css(`display:flex;align-items:center;gap:14px;`)}>
           <div onClick={goProfile} title="Open operator profile" style={css(`display:flex;align-items:center;gap:9px;padding:7px 13px;border-radius:10px;background:rgba(0,229,255,.05);border:1px solid rgba(0,229,255,.15);cursor:pointer;transition:border-color .2s,background .2s;`)} className="g1">
             <div style={css(`width:8px;height:8px;border-radius:50%;background:#19f0a0;box-shadow:0 0 8px #19f0a0;animation:lspulse 2s infinite;`)}></div>
-            <span style={css(`font-family:'JetBrains Mono',monospace;font-size:12px;color:#cfe9ff;letter-spacing:.05em;`)}>OPERATOR-7</span>
+            <span style={css(`font-family:'JetBrains Mono',monospace;font-size:12px;color:#cfe9ff;letter-spacing:.05em;`)}>{profileName}</span>
           </div>
-          <button onClick={goLogin} style={css(`padding:9px 20px;border-radius:10px;cursor:pointer;font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:13px;letter-spacing:.04em;color:#04121a;background:linear-gradient(135deg,#00E5FF,#8B5CF6);border:none;box-shadow:0 0 20px rgba(0,229,255,.35);transition:transform .2s,box-shadow .2s;`)} className="g2">LOGIN</button>
+          <button onClick={authed?onLogout:goLogin} style={css(`padding:9px 20px;border-radius:10px;cursor:pointer;font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:13px;letter-spacing:.04em;color:#04121a;background:linear-gradient(135deg,#00E5FF,#8B5CF6);border:none;box-shadow:0 0 20px rgba(0,229,255,.35);transition:transform .2s,box-shadow .2s;`)} className="g2">{authed?'LOGOUT':'LOGIN'}</button>
         </div>
         </>)}
         {mobileNav && (<>
@@ -683,6 +763,7 @@ class Component extends React.Component {
               </div>
             </div>
           </React.Fragment>))}
+          {noOperators && (<><div style={css(`padding:42px 22px;text-align:center;font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.06em;color:#5d8ba3;`)}>NO TRANSMISSIONS LOGGED YET — COMPLETE A MISSION TO CLAIM THE FIRST RANK.</div></>)}
         </div>
       </section>
       </>)}
@@ -728,7 +809,7 @@ class Component extends React.Component {
               <svg viewBox="0 0 140 140" style={css(`width:150px;height:150px;flex:0 0 auto;`)}>
                 <circle cx="70" cy="70" r="54" fill="none" stroke="rgba(255,255,255,.05)" strokeWidth="15"></circle>
                 {donut.map((s, $index) => (<React.Fragment key={$index}><circle cx="70" cy="70" r="54" fill="none" stroke={s.color} strokeWidth="15" strokeDasharray={`${s.dash} ${s.gap}`} strokeDashoffset={s.offset} transform="rotate(-90 70 70)"></circle></React.Fragment>))}
-                <text x="70" y="66" textAnchor="middle" fill="#eaf6ff" fontSize="24" fontWeight="700" fontFamily="Space Grotesk, sans-serif">97%</text>
+                <text x="70" y="66" textAnchor="middle" fill="#eaf6ff" fontSize="24" fontWeight="700" fontFamily="Space Grotesk, sans-serif">{avgAcc}%</text>
                 <text x="70" y="85" textAnchor="middle" fill="#5d8ba3" fontSize="9" letterSpacing="1.5" fontFamily="JetBrains Mono, monospace">AVG ACC</text>
               </svg>
               <div style={css(`flex:1;min-width:140px;display:flex;flex-direction:column;gap:9px;`)}>
@@ -848,16 +929,16 @@ class Component extends React.Component {
         <div style={css(`display:flex;flex-wrap:wrap;align-items:center;gap:28px;padding:32px;border-radius:22px;background:rgba(9,14,30,.55);border:1px solid rgba(0,229,255,.18);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:0 16px 60px rgba(0,0,0,.45);margin-bottom:22px;`)}>
           <div style={css(`position:relative;flex:0 0 auto;width:118px;height:118px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle,rgba(0,229,255,.16),rgba(139,92,246,.08));border:2px solid rgba(0,229,255,.5);box-shadow:0 0 36px rgba(0,229,255,.35);`)}>
             <img src="assets/logo-emblem.png" alt="" style={css(`width:82px;height:82px;object-fit:contain;filter:drop-shadow(0 0 10px rgba(0,229,255,.5));`)}/>
-            <div style={css(`position:absolute;bottom:-6px;left:50%;transform:translateX(-50%);padding:3px 12px;border-radius:8px;background:#0a0e1d;border:1px solid rgba(0,229,255,.4);font-family:'JetBrains Mono',monospace;font-size:10px;color:#00E5FF;white-space:nowrap;`)}>LVL 12</div>
+            <div style={css(`position:absolute;bottom:-6px;left:50%;transform:translateX(-50%);padding:3px 12px;border-radius:8px;background:#0a0e1d;border:1px solid rgba(0,229,255,.4);font-family:'JetBrains Mono',monospace;font-size:10px;color:#00E5FF;white-space:nowrap;`)}>LVL {profileLevel}</div>
           </div>
           <div style={css(`flex:1;min-width:220px;`)}>
             <div style={css(`font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.2em;color:#19f0a0;margin-bottom:6px;`)}>◉ ONLINE · OPERATOR</div>
-            <h1 style={css(`margin:0 0 4px;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:clamp(28px,4.5vw,40px);color:#eaf6ff;`)}>OPERATOR-7</h1>
-            <div style={css(`font-size:13px;color:#7c8db0;`)}>Joined 2086.11.03 · Reykjavík Relay Division</div>
+            <h1 style={css(`margin:0 0 4px;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:clamp(28px,4.5vw,40px);color:#eaf6ff;`)}>{profileName}</h1>
+            <div style={css(`font-size:13px;color:#7c8db0;`)}>Joined {profileJoined} · Relay Division</div>
           </div>
           <div style={css(`display:flex;gap:14px;flex-wrap:wrap;`)}>
-            <div style={css(`padding:16px 22px;border-radius:14px;background:rgba(0,229,255,.06);border:1px solid rgba(0,229,255,.22);text-align:center;`)}><div style={css(`font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.14em;color:#5d8ba3;`)}>BEST WPM</div><div style={css(`font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:30px;color:#00E5FF;`)}>142</div></div>
-            <div style={css(`padding:16px 22px;border-radius:14px;background:rgba(139,92,246,.06);border:1px solid rgba(139,92,246,.22);text-align:center;`)}><div style={css(`font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.14em;color:#5d8ba3;`)}>MISSIONS</div><div style={css(`font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:30px;color:#a78bfa;`)}>347</div></div>
+            <div style={css(`padding:16px 22px;border-radius:14px;background:rgba(0,229,255,.06);border:1px solid rgba(0,229,255,.22);text-align:center;`)}><div style={css(`font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.14em;color:#5d8ba3;`)}>BEST WPM</div><div style={css(`font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:30px;color:#00E5FF;`)}>{profileBestWpm}</div></div>
+            <div style={css(`padding:16px 22px;border-radius:14px;background:rgba(139,92,246,.06);border:1px solid rgba(139,92,246,.22);text-align:center;`)}><div style={css(`font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.14em;color:#5d8ba3;`)}>MISSIONS</div><div style={css(`font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:30px;color:#a78bfa;`)}>{profileMissions}</div></div>
           </div>
         </div>
       
@@ -885,6 +966,7 @@ class Component extends React.Component {
                   <span style={css(`font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.06em;color:${a.color};border:1px solid ${a.bdr};padding:4px 9px;border-radius:7px;white-space:nowrap;`)}>{a.val}</span>
                 </div>
               </React.Fragment>))}
+              {noActivity && (<><div style={css(`padding:24px 18px;text-align:center;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.05em;color:#5d8ba3;border:1px dashed rgba(255,255,255,.08);border-radius:13px;`)}>NO ACTIVITY YET — COMPLETE A MISSION TO START YOUR LOG.</div></>)}
             </div>
           </div>
         </div>
@@ -951,7 +1033,7 @@ class Component extends React.Component {
           {navItems.map((item, $index) => (<React.Fragment key={$index}>
             <div onClick={item.go} style={css(`padding:18px 16px;border-radius:14px;font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:24px;color:#cfe0f5;border-bottom:1px solid rgba(255,255,255,.05);cursor:pointer;`)}>{item.label}</div>
           </React.Fragment>))}
-          <button onClick={goLogin} style={css(`margin-top:24px;padding:18px;border-radius:14px;border:none;cursor:pointer;font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:16px;letter-spacing:.05em;color:#04121a;background:linear-gradient(135deg,#00E5FF,#8B5CF6);box-shadow:0 0 28px rgba(0,229,255,.45);`)}>LOGIN TO NETWORK</button>
+          <button onClick={authed?onLogout:goLogin} style={css(`margin-top:24px;padding:18px;border-radius:14px;border:none;cursor:pointer;font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:16px;letter-spacing:.05em;color:#04121a;background:linear-gradient(135deg,#00E5FF,#8B5CF6);box-shadow:0 0 28px rgba(0,229,255,.45);`)}>{authed?'LOG OUT':'LOGIN TO NETWORK'}</button>
         </div>
       </div>
       </>)}

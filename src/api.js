@@ -73,8 +73,16 @@ export const api = {
     return request('/auth/me', { auth: true });
   },
 
+  saveProgress(progress) {
+    return request('/auth/progress', { method: 'PUT', body: { progress }, auth: true });
+  },
+
   leaderboard(limit = 50) {
     return request(`/leaderboard?limit=${limit}`, { auth: true });
+  },
+
+  globalStats() {
+    return request('/stats/global');
   },
 
   submitRun(run) {

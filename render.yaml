@@ -1,0 +1,32 @@
+# Render Blueprint for The Last Signal backend (Express + PostgreSQL).
+# Deploy: Render Dashboard → New → Blueprint → connect this repo.
+#
+# DATABASE_URL is intentionally left unset here so Render does not bake a secret
+# into the repo. Add it (plus JWT_SECRET) in the Render dashboard, or point it at
+# your Aiven Service URI / a Render PostgreSQL instance.
+services:
+  - type: web
+    name: the-last-signal-api
+    runtime: node
+    rootDir: backend
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: DATABASE_SSL
+        value: require
+      - key: BCRYPT_ROUNDS
+        value: "10"
+      # Set after the Netlify site exists, e.g. https://the-last-signal.netlify.app
+      - key: CORS_ORIGIN
+        sync: false
+      # Aiven Service URI or a Render PostgreSQL connection string.
+      - key: DATABASE_URL
+        sync: false

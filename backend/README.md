@@ -1,22 +1,39 @@
 # The Last Signal — Backend
 
-A self-contained REST API + SQLite database powering **operator accounts** and the
-**global leaderboard** for The Last Signal.
+A REST API backed by an **online PostgreSQL database** (Aiven), powering **operator
+accounts** and the **global leaderboard** for The Last Signal.
 
 - **Express** — HTTP API
-- **SQLite** (via `better-sqlite3`) — zero-config embedded database, a single file under `data/`
+- **Aiven for PostgreSQL** (`pg`) — hosted Postgres in the cloud (free plan)
 - **bcryptjs** — password hashing
 - **jsonwebtoken** — stateless auth (JWT bearer tokens)
 
-No external database server is required — the database is just a file.
+The data lives in the cloud, so it persists across deploys and is shared by every client.
+
+## Create the online database (free)
+
+1. Sign up at <https://aiven.io> (free, no card needed).
+2. **Create service → PostgreSQL → Free plan**, pick a cloud/region, and create it.
+3. Wait until the service status is **Running**, then open it. In the
+   **Connection information** panel copy the **Service URI** — it looks like:
+   ```
+   postgres://avnadmin:PASSWORD@pg-xxxx-yourproj.aivencloud.com:12345/defaultdb?sslmode=require
+   ```
+4. Paste it into `backend/.env` as `DATABASE_URL` (see below). The schema is created
+   automatically on first boot — no manual migration needed.
+
+> The Service URI already contains the username and password, so it's the only value
+> you need. Aiven requires TLS; `DATABASE_SSL=require` (the default) handles that.
+> Optionally download the **CA Certificate** from the console and set `DATABASE_CA_CERT`
+> for full certificate verification.
 
 ## Quick start
 
 ```bash
 cd backend
 npm install
-cp .env.example .env          # then edit JWT_SECRET (Windows: copy .env.example .env)
-npm run seed                  # optional: load demo leaderboard operators
+cp .env.example .env          # Windows: copy .env.example .env
+#  -> set DATABASE_URL (Aiven Service URI) and a real JWT_SECRET
 npm run dev                   # starts http://localhost:4000 with auto-reload
 ```
 
@@ -26,37 +43,40 @@ npm run dev                   # starts http://localhost:4000 with auto-reload
 
 All settings come from environment variables (see `.env.example`):
 
-| Variable        | Default                         | Purpose                                    |
-| --------------- | ------------------------------- | ------------------------------------------ |
-| `PORT`          | `4000`                          | API port                                   |
-| `JWT_SECRET`    | `dev-insecure-secret-change-me` | Signs access tokens — **change this**      |
-| `JWT_EXPIRES_IN`| `7d`                            | Token lifetime                             |
-| `DB_FILE`       | `./data/the-last-signal.db`     | SQLite file location                       |
-| `CORS_ORIGIN`   | `http://localhost:5173`         | Allowed browser origin(s), or `*`          |
-| `BCRYPT_ROUNDS` | `10`                            | Password hash cost                         |
+| Variable           | Default                         | Purpose                                              |
+| ------------------ | ------------------------------- | ---------------------------------------------------- |
+| `DATABASE_URL`     | _(required)_                    | Aiven Postgres Service URI (`postgres://…`)          |
+| `DATABASE_SSL`     | `require`                       | `require` (Aiven) or `disable` (local non-TLS PG)    |
+| `DATABASE_CA_CERT` | _(empty)_                       | Optional CA cert (path or PEM) for full TLS verify   |
+| `PORT`             | `4000`                          | API port                                             |
+| `JWT_SECRET`       | `dev-insecure-secret-change-me` | Signs access tokens — **change this**                |
+| `JWT_EXPIRES_IN`   | `7d`                            | Token lifetime                                       |
+| `CORS_ORIGIN`      | `http://localhost:5173`         | Allowed browser origin(s), or `*`                    |
+| `BCRYPT_ROUNDS`    | `10`                            | Password hash cost                                   |
 
-In `NODE_ENV=production` the server refuses to boot with the default secret.
+The server will not start without `DATABASE_URL`. In `NODE_ENV=production` it also
+refuses to boot with the default `JWT_SECRET`.
 
 ## Data model
 
 ```
 users
-  id            INTEGER PK
-  username      TEXT UNIQUE (case-insensitive)
-  password_hash TEXT (bcrypt)
-  created_at    TEXT
+  id            BIGSERIAL PK
+  username      TEXT        -- unique on lower(username), i.e. case-insensitive
+  password_hash TEXT        -- bcrypt
+  created_at    TIMESTAMPTZ
 
-runs                       -- one row per completed typing mission
-  id            INTEGER PK
-  user_id       INTEGER FK -> users.id (cascade delete)
-  mission_id    TEXT       -- e.g. "LS-12" (nullable for quick play)
+runs                        -- one row per completed typing mission
+  id            BIGSERIAL PK
+  user_id       BIGINT FK -> users.id (cascade delete)
+  mission_id    TEXT        -- e.g. "LS-12" (nullable for quick play)
   wpm           REAL
-  accuracy      REAL       -- 0..100
+  accuracy      REAL        -- 0..100
   mistakes      INTEGER
   keystrokes    INTEGER
   words         INTEGER
   duration_sec  REAL
-  created_at    TEXT
+  created_at    TIMESTAMPTZ
 ```
 
 The leaderboard and personal stats are **derived** from `runs` with aggregate
@@ -85,6 +105,7 @@ Base path: `/api`
 | GET    | `/leaderboard`   | optional | `?limit=50`                 | `{ leaderboard: [...], you? }` |
 | POST   | `/runs`          | ✔        | run payload (below)         | `{ ok: true }` |
 | GET    | `/stats/me`      | ✔        | —                           | `{ stat, recent, wpmSeries, accDist }` |
+| GET    | `/stats/global`  | —        | —                           | `{ words, cities, runs, operators }` |
 | GET    | `/health`        | —        | —                           | `{ status: "ok", ... }` |
 
 Run payload:
@@ -160,7 +181,5 @@ const { leaderboard } = await api.leaderboard();
 const stats = await api.myStats();
 ```
 
-## Demo accounts
-
-After `npm run seed`, the demo operators (`NOVA_PRIME`, `GHOST_RELAY`, …) all share the
-password `operator123`.
+The leaderboard and home-page totals are entirely real — they reflect actual
+registered operators and the runs they complete. There is no demo/seed data.
